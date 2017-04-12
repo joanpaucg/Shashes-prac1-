@@ -15,8 +15,15 @@
 int dispositiu=0;
 int debug=0;
 char * ip;
+char * localhost;
 int estat;
 int sock;
+int sock_tcp;
+int procesos;
+long temps_subscripcio;
+int nopaquets;
+int prebuts;
+
 struct hostent  * server;
 struct sockaddr_in addr_server; /* per a la informacio de la dirreccio del servidor */
 struct idServidor dadesServidor;
@@ -95,14 +102,17 @@ void llegir_fitxer(char * f,struct configuracio * controlador);
 void init_pdu(struct pdu_udp * paquet,struct configuracio * client,unsigned char tipus_paquet,char numero_aleatori[9]);
 void subscripcio(struct configuracio client,struct sockaddr_in addr_server);
 char * get_time();
-void iniciarNouProcesDeSuscripicio(int * procesos,int * norespostos,long * temps,int * nopaquets);
+void iniciarNouProcesDeSubscripcio();
+void reinicialitzar_proces_subscripcio();
 int comprovarDadesServidor(struct idServidor dadesServidor,struct pdu_udp paquet);
+void mantenir_comunicacio();
+void gestor_sigalarm(int sig);
 int main(int argc,char * argv[]){
   char * fitxer;
   int i;
   struct configuracio client;
   fitxer="client.cfg";
-
+  procesos=1;
 
   for(i=1;i<argc;i++){
     if(strcmp(argv[i],"-c")==0){
@@ -116,7 +126,7 @@ int main(int argc,char * argv[]){
   }
   /*Llegir fitxer de configuracio*/
   llegir_fitxer(fitxer ,&client);
-  printf("%i\n",dispositiu );
+  /*printf("%i\n",dispositiu );
   printf("Name:%s\n",client.name);
   printf("Situation:%s\n",client.situation);
   printf("Element0 :%s\n",client.elements[0]);
@@ -126,7 +136,7 @@ int main(int argc,char * argv[]){
   printf("TCP:%s\n",client.tcp);
   printf("server:%s\n",client.server);
   printf("srv:%s\n",client.srv);
-  printf("debug=%i\n",debug);
+  printf("debug=%i\n",debug);*/
   /*Obrim socket UDP*/
   sock=socket(AF_INET,SOCK_DGRAM,0);
   if(sock==-1){
@@ -137,13 +147,21 @@ int main(int argc,char * argv[]){
   if(!server){
     exit(-1);
   }
-  memset(&addr_server,0,sizeof (struct sockaddr_in));
   ip=inet_ntoa(*(struct in_addr *)*(server->h_addr_list)++);
-  printf("%s\n",ip);
-	addr_server.sin_addr.s_addr=inet_addr(ip);
+  localhost=ip;
+  memset(&addr_server,0,sizeof (struct sockaddr_in));
+  addr_server.sin_addr.s_addr=inet_addr(localhost);
   addr_server.sin_family=AF_INET;
   addr_server.sin_port=htons(atoi(client.srv));
-  subscripcio(client,addr_server);
+  /*printf("%s\n",ip);*/
+  while(1){
+
+    subscripcio(client,addr_server);
+    if(estat==SUBSCRIBED){
+      mantenir_comunicacio(client);
+    }
+  }
+
 
 
 
@@ -240,8 +258,13 @@ void llegir_fitxer(char * f,struct configuracio * controlador){
   close(fd);
 }
 void init_pdu(struct pdu_udp * paquet,struct configuracio * client,unsigned char tipus_paquet,char numero_aleatori[9]){
-  if(tipus_paquet==SUBS_REQ){
-    paquet->tipus_paquet=SUBS_REQ;
+  if(tipus_paquet==SUBS_REQ || tipus_paquet==HELLO){
+    if(tipus_paquet==SUBS_REQ){
+      paquet->tipus_paquet=SUBS_REQ;
+    }
+    else{
+      paquet->tipus_paquet=HELLO;
+    }
     strcpy(paquet->dades,client->name);
     paquet->dades[8]=',';
     paquet->dades[9]='\0';
@@ -278,37 +301,38 @@ void init_pdu(struct pdu_udp * paquet,struct configuracio * client,unsigned char
 void subscripcio(struct configuracio client,struct sockaddr_in addr_server){
 
   int finish=0;
-  int procesos=1;
+  /*int procesos=1;*/
   fd_set rfds;
   int retval;
   struct pdu_udp paquet;
   struct timeval timeout;
-  int nopaquets=0;
-  int norespostos=0;
-  int prebuts=0;
-  long temps=t;
+  /*int norespostos=0;*/
+  prebuts=0;
+  /*long temps=t;*/
+  nopaquets=0;
+  temps_subscripcio=t;
   estat=NOT_SUBSCRIBED;
   while(finish==0){
     if(procesos>o){
       printf("%s  MSG =>El client no s'ha pogut connectar amb el servidor\n",get_time());
       exit(-1);
     }
-    timeout.tv_sec=temps;
+    timeout.tv_sec=temps_subscripcio;
     timeout.tv_usec = 0;
     FD_ZERO(&rfds);
     FD_SET(sock, &rfds);
     if(estat==NOT_SUBSCRIBED){
-      printf("%s  MSG => Client passa a l'estat NOT_SUBSCRIBED\no: %i\n",get_time(),procesos);
+      printf("%s  MSG => Controlador en l'estat NOT_SUBSCRIBED,procés de subscripció o: %i\n",get_time(),procesos);
       init_pdu(&paquet,&client,SUBS_REQ,"00000000");
       printf("Paquet SUBSREQ %s\n",paquet.dades);
+      addr_server.sin_port=htons(atoi(client.srv));
 
     }
     sendto(sock,&paquet,sizeof(paquet),0,(const struct sockaddr *)&addr_server,sizeof(addr_server));
     nopaquets++;
-    /*printf("Paquet SUBSREQ %i enviat \n",nopaquets);*/
     if(nopaquets==1){
       estat=WAIT_ACK_SUBS;
-      printf("%s  MSG => Client passa a l'estat WAIT_ACK_SUBS\n",get_time());
+      printf("%s  MSG => Controlador passa a l'estat WAIT_ACK_SUBS\n",get_time());
     }
     retval=select(sock+1,&rfds,NULL,NULL,&timeout);
     if(retval==-1){
@@ -317,42 +341,44 @@ void subscripcio(struct configuracio client,struct sockaddr_in addr_server){
     }else if(retval>0){
       printf("Data disponible\n");
       recvfrom(sock,&paquet,sizeof(paquet),0,(struct sockaddr *)&addr_server,(socklen_t *)sizeof(addr_server));
-      prebuts++;
       if(paquet.tipus_paquet==SUBS_ACK){
+        prebuts++;
         printf("PAQUET SUBS_ACK REBUT\n");
         if(estat==WAIT_ACK_SUBS){
-          printf("Tipus %c\n",paquet.tipus_paquet );
+          /*printf("Tipus %c\n",paquet.tipus_paquet );
           printf("MAC %s\n",paquet.mac );
           printf("numero_aleatori %s\n",paquet.numero_aleatori);
-          printf("Dades %s\n",paquet.dades );
+          printf("Dades %s\n",paquet.dades );*/
           ip=inet_ntoa(addr_server.sin_addr);
-          printf("Adreça IP %s\n",ip);
+          /*printf("Adreça IP %s\n",ip);*/
           if(prebuts==1){
             strcpy(dadesServidor.ip,inet_ntoa(addr_server.sin_addr));
             printf("Adreça IP %s\n",dadesServidor.ip);
             strcpy(dadesServidor.mac,paquet.mac);
             strcpy(dadesServidor.numero_aleatori,paquet.numero_aleatori);
             strcpy(port_udp,paquet.dades);
+            addr_server.sin_port=htons(atoi(port_udp));
+            /*printf("Port udp %s\n",port_udp);*/
+            init_pdu(&paquet,&client,SUBS_INFO,dadesServidor.numero_aleatori);
+            estat=WAIT_ACK_INFO;
+            printf("%s  MSG => Controlador passa a l'estat WAIT_ACK_INFO\n",get_time());
           }
-          printf("Port udp %s\n",port_udp);
-          init_pdu(&paquet,&client,SUBS_INFO,dadesServidor.numero_aleatori);
-          addr_server.sin_port=htons(atoi(port_udp));
-          /*sendto(sock,&paquet,sizeof(paquet),0,(const struct sockaddr *)&addr_server,sizeof(addr_server));*/
-          estat=WAIT_ACK_INFO;
+
+
         }else{
-          iniciarNouProcesDeSuscripicio(&procesos,&norespostos,&temps,&nopaquets);
+          iniciarNouProcesDeSubscripcio();
         }
 
       }
       else if (paquet.tipus_paquet==SUBS_NACK) {
         /* code */
         printf("Paquet SUBS_NACK REBUT\n");
-        iniciarNouProcesDeSuscripicio(&procesos,&nopaquets,&temps,&nopaquets);
+        iniciarNouProcesDeSubscripcio();
       }
       else if (paquet.tipus_paquet==SUBS_REJ) {
         /* code */
         printf("Paquet SUBS_REJ REBUT\n");
-        iniciarNouProcesDeSuscripicio(&procesos,&norespostos,&temps,&nopaquets);
+        iniciarNouProcesDeSubscripcio();
       }
       else if (paquet.tipus_paquet==INFO_ACK) {
         /* code */
@@ -361,33 +387,104 @@ void subscripcio(struct configuracio client,struct sockaddr_in addr_server){
         if(estat==WAIT_ACK_INFO){
           if(comprovarDadesServidor(dadesServidor,paquet)==0){
             estat=SUBSCRIBED;
+            printf("%s  MSG => Controlador passa a l'estat SUBSCRIBED\n",get_time());
+
             finish=1;
           }else{
-            iniciarNouProcesDeSuscripicio(&procesos,&norespostos,&temps,&nopaquets);
+            printf("Dades d'identificacio del Servidor incorrectes\n");
+            iniciarNouProcesDeSubscripcio();
 
           }
 
         }else{
-          iniciarNouProcesDeSuscripicio(&procesos,&norespostos,&temps,&nopaquets);
+          iniciarNouProcesDeSubscripcio();
         }
       }
 
     }else if(retval==0){
-      norespostos++;
-      printf("No dades en %lu s\n",temps);
-      if(norespostos>p){
-        if(temps<q*t){
-          temps=temps + t;
+      /*norespostos++;*/
+      printf("No dades en %lu s\n",temps_subscripcio);
+      if(nopaquets>p){
+        if(temps_subscripcio<q*t){
+          temps_subscripcio=temps_subscripcio + t;
         }
-        if(norespostos==n){
-          printf("Iniciant nou procés de subscripcio %i\n",u);
-          sleep(u);
-          iniciarNouProcesDeSuscripicio(&procesos,&norespostos,&temps,&nopaquets);
+        if(nopaquets==n){
+          iniciarNouProcesDeSubscripcio();
 
         }
       }
     }
 
+  }
+
+}
+void mantenir_comunicacio(struct configuracio client){
+  struct pdu_udp paquet_enviat;
+  struct pdu_udp paquet_rebut;
+  struct timeval timeout;
+  fd_set rfds;
+  int retval;
+  int hello_rebuts=0;
+  int hello_perduts=0;
+  int temps=r*v-v;
+  /*int port_tcp_obert=0;*/
+  init_pdu(&paquet_enviat,&client,HELLO,dadesServidor.numero_aleatori);
+  timeout.tv_sec=temps;
+  timeout.tv_usec = 0;
+  while(estat==SUBSCRIBED||estat==SEND_HELLO){
+    FD_ZERO(&rfds);
+    FD_SET(sock, &rfds);
+    printf("Enviant HELLO\n");
+    sendto(sock,&paquet_enviat,sizeof(paquet_enviat),0,(const struct sockaddr *)&addr_server,sizeof(addr_server));
+    signal(SIGALRM,gestor_sigalarm);
+    alarm(v);
+    pause();
+    retval=select(sock+1,&rfds,NULL,NULL,&timeout);
+    if(retval==-1){
+      perror("Error select\n");
+    }else if(retval>0){
+      printf("Data disponible\n");
+      recvfrom(sock,&paquet_rebut,sizeof(paquet_rebut),0,(struct sockaddr *)&addr_server,(socklen_t *)sizeof(addr_server));
+      ip=inet_ntoa(addr_server.sin_addr);
+      if(paquet_rebut.tipus_paquet==HELLO){
+        if(hello_rebuts==0){
+          estat=SEND_HELLO;
+          printf("%s  MSG => Controlador passa a l'estat SEND_HELLO\n",get_time());
+          timeout.tv_sec=0;
+          sock_tcp=socket(AF_INET,SOCK_STREAM,0);/*Obrir port tcp en l'estat SEND_HELLO*/
+
+        }
+        hello_perduts=0;/*Reinicialitza el comptador de hello no rebuts consecutius*/
+        hello_rebuts++;
+        if(comprovarDadesServidor(dadesServidor,paquet_rebut)!=0 || strcmp(paquet_enviat.dades,paquet_rebut.dades)!=0){
+          /*Enviar HELLO_REJ*/
+          paquet_enviat.tipus_paquet=HELLO_REJ;
+          sendto(sock,&paquet_enviat,sizeof(paquet_enviat),0,(const struct sockaddr *)&addr_server,sizeof(addr_server));
+          printf("Enviar HELLO_REJ\n");
+          /*Iniciar nou procés de subscripcio*/
+          iniciarNouProcesDeSubscripcio();
+          /*reinicialitzar_proces_subscripcio();*/
+        }
+      }else{
+        printf("HELLO_REJ\n");
+        /*Iniciar nou procés de subscripcio*/
+        iniciarNouProcesDeSubscripcio();
+        /*reinicialitzar_proces_subscripcio();*/
+      }
+
+
+    }else if(retval==0){
+      if(hello_rebuts==0){/*No ha rebut el primer HELLO en el temps maxim*/
+        /*reinicialitzar_proces_subscripcio();*/
+        printf("%s  Finalitzat el temporitzador per la confirmació del primer HELLO\n",get_time());
+        iniciarNouProcesDeSubscripcio();
+      }
+      hello_perduts++;
+      if(hello_perduts==s){
+        iniciarNouProcesDeSubscripcio();
+      }
+
+    }
   }
 
 }
@@ -400,12 +497,17 @@ char * get_time(){
   strcpy(now,aux);
   return now;
 }
-void iniciarNouProcesDeSuscripicio(int * procesos,int * norespostos,long * temps,int * nopaquets){
-  *procesos=*procesos+1;
+void iniciarNouProcesDeSubscripcio(){
   estat=NOT_SUBSCRIBED;
-  *nopaquets=0;
-  *norespostos=0;
-  *temps=t;
+  printf("%s  MSG => Controlador passa a l'estat NOT_SUBSCRIBED\n",get_time());
+  printf("Iniciant nou procés de subscripcio %i\n",u);
+  signal(SIGALRM,gestor_sigalarm);
+  alarm(u);
+  pause();
+  procesos=procesos+1;
+  nopaquets=0;
+  temps_subscripcio=t;
+  prebuts=0;
 }
 int comprovarDadesServidor(struct idServidor dadesServidor,struct pdu_udp paquet){
   if(strcmp(dadesServidor.mac,paquet.mac)==0
@@ -415,4 +517,15 @@ int comprovarDadesServidor(struct idServidor dadesServidor,struct pdu_udp paquet
   }else{
     return -1;
   }
+}
+void gestor_sigalarm(int sig){
+
+}
+void reinicialitzar_proces_subscripcio(){
+  procesos=1;
+  estat=NOT_SUBSCRIBED;
+  nopaquets=0;
+  temps_subscripcio=t;
+  prebuts=0;
+
 }
