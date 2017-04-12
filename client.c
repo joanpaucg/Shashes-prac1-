@@ -12,6 +12,7 @@
 #include <sys/time.h>
 #include<time.h>
 #include <signal.h>
+#include<pthread.h>
 int dispositiu=0;
 int debug=0;
 char * ip;
@@ -23,11 +24,14 @@ int procesos;
 long temps_subscripcio;
 int nopaquets;
 int prebuts;
+pthread_t tid [3];
+
 
 struct hostent  * server;
 struct sockaddr_in addr_server; /* per a la informacio de la dirreccio del servidor */
 struct idServidor dadesServidor;
 char port_udp[5];
+char port_tcp_servidor[5];
 /*Fase de Registre*/
 #define SUBS_REQ 0x00/*Peticio de subscripcio*/
 #define SUBS_ACK 0x01/*Acceptacio del paquet*/
@@ -107,6 +111,7 @@ void reinicialitzar_proces_subscripcio();
 int comprovarDadesServidor(struct idServidor dadesServidor,struct pdu_udp paquet);
 void mantenir_comunicacio();
 void gestor_sigalarm(int sig);
+void *introduir_comandes_per_consola(struct configuracio * client);
 int main(int argc,char * argv[]){
   char * fitxer;
   int i;
@@ -159,7 +164,9 @@ int main(int argc,char * argv[]){
     subscripcio(client,addr_server);
     if(estat==SUBSCRIBED){
       mantenir_comunicacio(client);
+      pthread_join(tid[0],NULL);
     }
+
   }
 
 
@@ -385,6 +392,8 @@ void subscripcio(struct configuracio client,struct sockaddr_in addr_server){
         printf("Paquet INFO_ACK REBUT\n");
 
         if(estat==WAIT_ACK_INFO){
+          strcpy(port_tcp_servidor,paquet.dades);
+          printf("Port tcp per a enviar Controladors %s\n",port_tcp_servidor);
           if(comprovarDadesServidor(dadesServidor,paquet)==0){
             estat=SUBSCRIBED;
             printf("%s  MSG => Controlador passa a l'estat SUBSCRIBED\n",get_time());
@@ -452,7 +461,8 @@ void mantenir_comunicacio(struct configuracio client){
           printf("%s  MSG => Controlador passa a l'estat SEND_HELLO\n",get_time());
           timeout.tv_sec=0;
           sock_tcp=socket(AF_INET,SOCK_STREAM,0);/*Obrir port tcp en l'estat SEND_HELLO*/
-
+          pthread_create(&tid[0], NULL, (void *(*) (void *)) introduir_comandes_per_consola,&client);
+          /*introduir_comandes_per_consola(client);*/
         }
         hello_perduts=0;/*Reinicialitza el comptador de hello no rebuts consecutius*/
         hello_rebuts++;
@@ -527,5 +537,49 @@ void reinicialitzar_proces_subscripcio(){
   nopaquets=0;
   temps_subscripcio=t;
   prebuts=0;
+
+}
+void *introduir_comandes_per_consola(struct configuracio * client){
+  struct timeval timeout;
+  fd_set rfds;
+  int retval;
+  int i;
+  char  comanda[50];
+  timeout.tv_sec=0;
+  timeout.tv_usec=0;
+
+  while(estat==SEND_HELLO){
+    FD_ZERO(&rfds);
+    FD_SET(0, &rfds);
+    retval=select(1,&rfds,NULL,NULL,&timeout);
+    if(retval==-1){
+      perror("select()");
+    }else if(retval>0){
+      scanf("%s",comanda);
+      if(strcmp(comanda,"stat")==0){
+        fprintf(stdout,"******************** DADES CONTROLADOR *********************\n");
+        fprintf(stdout,"  MAC: %s, Nom: %s, Situació: %s\n",client->mac,client->name
+        ,client->situation);
+        fprintf(stdout,"Estat: SEND_HELLO\n");
+        fprintf(stdout,"    Dispos.	 valor\n");
+        fprintf(stdout,"    -------	 ------\n");
+        for(i=0;i<=dispositiu;i++){
+          fprintf(stdout,"%s\n",client->elements[i]);
+        }
+        fprintf(stdout,"************************************************************\n");
+
+      }
+      else if(strcmp(comanda,"quit")==0){
+        fprintf(stdout,"Terminat\n");
+        exit(0);
+      }
+      else{
+        fprintf(stdout,"%s  MSG => Comanda Incorrecta (%s)\n",get_time(),comanda);
+      }
+
+    }
+
+  }
+  return NULL;
 
 }
