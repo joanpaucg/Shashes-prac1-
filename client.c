@@ -13,25 +13,24 @@
 #include<time.h>
 #include <signal.h>
 #include<pthread.h>
+/*Variables globals*/
 int dispositiu=0;
-int debug=0;
+int debug=0;/*Variable que permet els missatges adicionals*/
 char * ip;
 char * localhost;
-int estat;
-int sock;
+int estat;/*estat del client*/
+int sock;/*socket udp*/
 int sock_tcp;
-int procesos;
-long temps_subscripcio;
+int procesos;/*procesos de subscripico*/
+long temps_subscripcio;/*Interval de temps en la subscripcio*/
 int nopaquets;
 int prebuts;
 pthread_t tid [3];
-
-
 struct hostent  * server;
 struct sockaddr_in addr_server; /* per a la informacio de la dirreccio del servidor */
 struct idServidor dadesServidor;
-char port_udp[5];
-char port_tcp_servidor[5];
+char port_udp[6];
+char port_tcp_servidor[6];
 /*Fase de Registre*/
 #define SUBS_REQ 0x00/*Peticio de subscripcio*/
 #define SUBS_ACK 0x01/*Acceptacio del paquet*/
@@ -74,24 +73,24 @@ struct configuracio{
   char situation[13];
   char elements [10][8];
   char mac[13];
-  char tcp[5];
+  char tcp[6];
   char server[10];
-  char srv[5];
+  char srv[6];
 };
-struct idServidor{
+struct idServidor{/*Estructura per a emmagatzemar les dades d'identificacio del servidor*/
   char mac[13];
   char numero_aleatori[9];
   char ip[10];
 };
 /*Format PDU UDP*/
-struct pdu_udp{
+struct pdu_udp{/*Estructura per enviar paquets udp*/
   unsigned char tipus_paquet;
   char mac[13];
   char numero_aleatori[9];
   char dades[80];
 };
 /*Format PDU TCP*/
-struct pdu_tcp{
+struct pdu_tcp{/*Estructura per enviar paquets tcp*/
   unsigned char tipus_paquet;
   char mac[13];/*Adreça  MAC  de  la  interfície  de  xarxa  del  controlador  (de  l’arxiu
 configuració)*/
@@ -102,6 +101,7 @@ send*/
   char valor[7];/*valor associat al dispositiu*/
   char info[80];/*Valor buit ("")*/
 };
+/*Capçaleres*/
 void llegir_fitxer(char * f,struct configuracio * controlador);
 void init_pdu(struct pdu_udp * paquet,struct configuracio * client,unsigned char tipus_paquet,char numero_aleatori[9]);
 void subscripcio(struct configuracio client,struct sockaddr_in addr_server);
@@ -128,20 +128,19 @@ int main(int argc,char * argv[]){
       debug=1;
     }
 
+
+
   }
+  if (debug == 1){
+    printf("%s  DEBUG =>Llegits parametres de linia de comandes\n",get_time());
+  }
+
   /*Llegir fitxer de configuracio*/
   llegir_fitxer(fitxer ,&client);
-  /*printf("%i\n",dispositiu );
-  printf("Name:%s\n",client.name);
-  printf("Situation:%s\n",client.situation);
-  printf("Element0 :%s\n",client.elements[0]);
-  printf("Element1 :%s\n",client.elements[1]);
-  printf("Element2 :%s\n",client.elements[2]);
-  printf("MAC:%s\n",client.mac);
-  printf("TCP:%s\n",client.tcp);
-  printf("server:%s\n",client.server);
-  printf("srv:%s\n",client.srv);
-  printf("debug=%i\n",debug);*/
+  if (debug == 1){
+    printf("%s  DEBUG =>Llegits parametres arxiu de configuració\n",get_time());
+  }
+
   /*Obrim socket UDP*/
   sock=socket(AF_INET,SOCK_DGRAM,0);
   if(sock==-1){
@@ -158,7 +157,9 @@ int main(int argc,char * argv[]){
   addr_server.sin_addr.s_addr=inet_addr(localhost);
   addr_server.sin_family=AF_INET;
   addr_server.sin_port=htons(atoi(client.srv));
-  /*printf("%s\n",ip);*/
+  if (debug == 1){
+    printf("%s  DEBUG =>Inici bucle de servei equip :%s\n",get_time(),client.name);
+  }
   while(1){
 
     subscripcio(client,addr_server);
@@ -331,13 +332,22 @@ void subscripcio(struct configuracio client,struct sockaddr_in addr_server){
     if(estat==NOT_SUBSCRIBED){
       printf("%s  MSG => Controlador en l'estat NOT_SUBSCRIBED,procés de subscripció o: %i\n",get_time(),procesos);
       init_pdu(&paquet,&client,SUBS_REQ,"00000000");
-      printf("Paquet SUBSREQ %s\n",paquet.dades);
       addr_server.sin_port=htons(atoi(client.srv));
 
     }
+    if (debug==1){
+      if(estat==WAIT_ACK_SUBS){
+        printf("%s  DEBUG =>  Enviat: bytes=103, comanda=SUBS_REQ, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet.mac,paquet.numero_aleatori,paquet.dades);
+      }
+
+    }
+
     sendto(sock,&paquet,sizeof(paquet),0,(const struct sockaddr *)&addr_server,sizeof(addr_server));
     nopaquets++;
     if(nopaquets==1){
+      if (debug==1){
+        printf("%s  DEBUG =>  Enviat: bytes=103, comanda=SUBS_REQ, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet.mac,paquet.numero_aleatori,paquet.dades);
+      }
       estat=WAIT_ACK_SUBS;
       printf("%s  MSG => Controlador passa a l'estat WAIT_ACK_SUBS\n",get_time());
     }
@@ -346,18 +356,15 @@ void subscripcio(struct configuracio client,struct sockaddr_in addr_server){
       perror("select()");
 
     }else if(retval>0){
-      printf("Data disponible\n");
       recvfrom(sock,&paquet,sizeof(paquet),0,(struct sockaddr *)&addr_server,(socklen_t *)sizeof(addr_server));
       if(paquet.tipus_paquet==SUBS_ACK){
         prebuts++;
-        printf("PAQUET SUBS_ACK REBUT\n");
+        if (debug==1){
+          printf("%s  DEBUG =>  REBUT: bytes=103, comanda=SUBS_ACK, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet.mac,paquet.numero_aleatori,paquet.dades);
+        }
+
         if(estat==WAIT_ACK_SUBS){
-          /*printf("Tipus %c\n",paquet.tipus_paquet );
-          printf("MAC %s\n",paquet.mac );
-          printf("numero_aleatori %s\n",paquet.numero_aleatori);
-          printf("Dades %s\n",paquet.dades );*/
           ip=inet_ntoa(addr_server.sin_addr);
-          /*printf("Adreça IP %s\n",ip);*/
           if(prebuts==1){
             strcpy(dadesServidor.ip,inet_ntoa(addr_server.sin_addr));
             printf("Adreça IP %s\n",dadesServidor.ip);
@@ -365,42 +372,63 @@ void subscripcio(struct configuracio client,struct sockaddr_in addr_server){
             strcpy(dadesServidor.numero_aleatori,paquet.numero_aleatori);
             strcpy(port_udp,paquet.dades);
             addr_server.sin_port=htons(atoi(port_udp));
-            /*printf("Port udp %s\n",port_udp);*/
+            if (debug==1){
+              printf("%s  DEBUG =>  Dades del servidor emmagatzemades\n",get_time());
+            }
             init_pdu(&paquet,&client,SUBS_INFO,dadesServidor.numero_aleatori);
             estat=WAIT_ACK_INFO;
+            if (debug==1){
+              printf("%s  DEBUG =>  Enviat: bytes=103, comanda=SUBS_INFO, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet.mac,paquet.numero_aleatori,paquet.dades);
+            }
             printf("%s  MSG => Controlador passa a l'estat WAIT_ACK_INFO\n",get_time());
+
           }
 
 
         }else{
+          if (debug==1){
+            printf("%s  DEBUG => Rebut Paquet SUBS_ACK en estat incorrecte \n",get_time());
+          }
           iniciarNouProcesDeSubscripcio();
         }
 
       }
       else if (paquet.tipus_paquet==SUBS_NACK) {
         /* code */
-        printf("Paquet SUBS_NACK REBUT\n");
+        if (debug==1){
+          printf("%s  DEBUG =>  Rebut: bytes=103, comanda=SUBS_NACK, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet.mac,paquet.numero_aleatori,paquet.dades);
+        }
         iniciarNouProcesDeSubscripcio();
       }
       else if (paquet.tipus_paquet==SUBS_REJ) {
         /* code */
-        printf("Paquet SUBS_REJ REBUT\n");
+        if (debug==1){
+          printf("%s  DEBUG =>  Rebut: bytes=103, comanda=SUBS_REJ, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet.mac,paquet.numero_aleatori,paquet.dades);
+          printf("%s  DEBUG => Rebutjat paquet de subscripció enviat, motiu: %s\n",get_time(),paquet.dades);
+        }
         iniciarNouProcesDeSubscripcio();
       }
       else if (paquet.tipus_paquet==INFO_ACK) {
         /* code */
-        printf("Paquet INFO_ACK REBUT\n");
+        if (debug==1){
+          printf("%s  DEBUG =>  Rebut: bytes=103, comanda=INFO_ACK, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet.mac,paquet.numero_aleatori,paquet.dades);
+        }
 
         if(estat==WAIT_ACK_INFO){
           strcpy(port_tcp_servidor,paquet.dades);
           printf("Port tcp per a enviar Controladors %s\n",port_tcp_servidor);
           if(comprovarDadesServidor(dadesServidor,paquet)==0){
             estat=SUBSCRIBED;
+            if (debug==1){
+              printf("%s  DEBUG =>  Acceptada la subscripció del controlador en el servidor\n",get_time());
+            }
             printf("%s  MSG => Controlador passa a l'estat SUBSCRIBED\n",get_time());
 
             finish=1;
           }else{
-            printf("Dades d'identificacio del Servidor incorrectes\n");
+            if (debug==1){
+              printf("%s  DEBUG =>Error en les dades d'identificació del servidor (rebut ip: %s, mac: %s, rndm: %s)\n",get_time(),ip,paquet.mac,paquet.numero_aleatori);
+            }
             iniciarNouProcesDeSubscripcio();
 
           }
@@ -437,6 +465,10 @@ void mantenir_comunicacio(struct configuracio client){
   int hello_perduts=0;
   int temps=r*v-v;
   /*int port_tcp_obert=0;*/
+  if (debug==1){
+    printf("%s  DEBUG =>  El controlador comença el enviament periòdic de HELLO \n",get_time());
+    printf("%s  DEBUG =>  Establert temporitzador per enviament de HELLO \n",get_time());
+  }
   init_pdu(&paquet_enviat,&client,HELLO,dadesServidor.numero_aleatori);
   timeout.tv_sec=temps;
   timeout.tv_usec = 0;
@@ -445,6 +477,9 @@ void mantenir_comunicacio(struct configuracio client){
     FD_SET(sock, &rfds);
     printf("Enviant HELLO\n");
     sendto(sock,&paquet_enviat,sizeof(paquet_enviat),0,(const struct sockaddr *)&addr_server,sizeof(addr_server));
+    if (debug==1){
+      printf("%s  DEBUG =>  Enviat: bytes=103, comanda=HELLO, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet_enviat.mac,paquet_enviat.numero_aleatori,paquet_enviat.dades);
+    }
     signal(SIGALRM,gestor_sigalarm);
     alarm(v);
     pause();
@@ -452,31 +487,46 @@ void mantenir_comunicacio(struct configuracio client){
     if(retval==-1){
       perror("Error select\n");
     }else if(retval>0){
-      printf("Data disponible\n");
       recvfrom(sock,&paquet_rebut,sizeof(paquet_rebut),0,(struct sockaddr *)&addr_server,(socklen_t *)sizeof(addr_server));
       ip=inet_ntoa(addr_server.sin_addr);
       if(paquet_rebut.tipus_paquet==HELLO){
+        if (debug==1){
+          printf("%s  DEBUG =>  Rebut: bytes=103, comanda=HELLO, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet_rebut.mac,paquet_rebut.numero_aleatori,paquet_rebut.dades);
+        }
         if(hello_rebuts==0){
           estat=SEND_HELLO;
           printf("%s  MSG => Controlador passa a l'estat SEND_HELLO\n",get_time());
           timeout.tv_sec=0;
+          if (debug==1){
+            printf("%s  DEBUG => Obert Port TCP %s per la comunicació amb el servidor\n",get_time(),client.tcp);
+          }
           sock_tcp=socket(AF_INET,SOCK_STREAM,0);/*Obrir port tcp en l'estat SEND_HELLO*/
           pthread_create(&tid[0], NULL, (void *(*) (void *)) introduir_comandes_per_consola,&client);
-          /*introduir_comandes_per_consola(client);*/
+          if (debug==1){
+            printf("%s  DEBUG => Creat procés per a introduir comandes per consola\n",get_time());
+          }
         }
         hello_perduts=0;/*Reinicialitza el comptador de hello no rebuts consecutius*/
         hello_rebuts++;
         if(comprovarDadesServidor(dadesServidor,paquet_rebut)!=0 || strcmp(paquet_enviat.dades,paquet_rebut.dades)!=0){
           /*Enviar HELLO_REJ*/
+          if (debug==1){
+            printf("%s  DEBUG => Error en les dades d'identificació del servidor (rebut ip: %s,mac: %s,rndm: %s)\n",get_time(),ip,paquet_rebut.mac,paquet_rebut.numero_aleatori);
+          }
           paquet_enviat.tipus_paquet=HELLO_REJ;
+          strcpy(paquet_enviat.dades,"Dades d'identificació incorrectes");
           sendto(sock,&paquet_enviat,sizeof(paquet_enviat),0,(const struct sockaddr *)&addr_server,sizeof(addr_server));
-          printf("Enviar HELLO_REJ\n");
+          if (debug==1){
+            printf("%s  DEBUG =>  Enviat: bytes=103, comanda=HELLO_REJ, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet_enviat.mac,paquet_enviat.numero_aleatori,paquet_enviat.dades);
+          }
           /*Iniciar nou procés de subscripcio*/
           iniciarNouProcesDeSubscripcio();
           /*reinicialitzar_proces_subscripcio();*/
         }
       }else{
-        printf("HELLO_REJ\n");
+        if (debug==1){
+          printf("%s  DEBUG =>  Rebut: bytes=103, comanda=HELLO_REJ, mac=%s, rndm=%s,dades=%s\n",get_time(),paquet_rebut.mac,paquet_rebut.numero_aleatori,paquet_rebut.dades);
+        }
         /*Iniciar nou procés de subscripcio*/
         iniciarNouProcesDeSubscripcio();
         /*reinicialitzar_proces_subscripcio();*/
@@ -486,7 +536,7 @@ void mantenir_comunicacio(struct configuracio client){
     }else if(retval==0){
       if(hello_rebuts==0){/*No ha rebut el primer HELLO en el temps maxim*/
         /*reinicialitzar_proces_subscripcio();*/
-        printf("%s  Finalitzat el temporitzador per la confirmació del primer HELLO\n",get_time());
+        printf("%s  Finalitzat el temporitzador per la confirmació del primer HELLO(%i)\n",get_time(),r*v);
         iniciarNouProcesDeSubscripcio();
       }
       hello_perduts++;
@@ -510,7 +560,6 @@ char * get_time(){
 void iniciarNouProcesDeSubscripcio(){
   estat=NOT_SUBSCRIBED;
   printf("%s  MSG => Controlador passa a l'estat NOT_SUBSCRIBED\n",get_time());
-  printf("Iniciant nou procés de subscripcio %i\n",u);
   signal(SIGALRM,gestor_sigalarm);
   alarm(u);
   pause();
@@ -570,6 +619,10 @@ void *introduir_comandes_per_consola(struct configuracio * client){
 
       }
       else if(strcmp(comanda,"quit")==0){
+        if (debug==1){
+          printf("%s  DEBUG =>  Tancat socket TCP per la comunicació amb el servidor\n",get_time());
+          printf("%s  DEBUG =>  Tancat socket UDP per la comunicació amb el servidor\n",get_time());
+        }
         fprintf(stdout,"Terminat\n");
         exit(0);
       }
